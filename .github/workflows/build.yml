@@ -1,0 +1,55 @@
+
+name: Build Xbox 360 XSDK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-sdk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential bison flex texinfo \
+            libgmp-dev libmpfr-dev libmpc-dev \
+            curl xz-utils patch python3 \
+            cmake ninja-build git
+
+      - name: Fetch XSDK
+        run: |
+          git clone --depth 1 \
+            https://github.com/xenosworks/xsdk.git xsdk
+
+      - name: Cache XSDK toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/xsdk-gcc
+          key: xsdk-gcc-toolchain-v1
+
+      - name: Build PowerPC toolchain
+        run: |
+          PREFIX=$HOME/xsdk-gcc \
+          WORK=$HOME/xsdk-gcc-work \
+          JOBS=2 \
+          bash xsdk/tools/toolchain/build.sh
+
+      - name: Build XSDK libraries and test XEX
+        run: |
+          make -C xsdk -j2 \
+            TOOLCHAIN=$HOME/xsdk-gcc/bin/powerpc-xsdk-elf-
+
+      - name: Upload XSDK test XEX
+        uses: actions/upload-artifact@v4
+        with:
+          name: xsdk-test-xex
+          path: xsdk/build/xsdk_test.xex
+          if-no-files-found: error
+          
