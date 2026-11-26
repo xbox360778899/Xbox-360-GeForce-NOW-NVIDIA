@@ -24,16 +24,19 @@ namespace {
 constexpr uint32_t kBuffers = 2;
 constexpr uint32_t kBeginTimeoutMs = 5000;
 constexpr uint32_t kFenceTimeoutMs = 1000;
-constexpr uint32_t kMaxVertices = 2048;
+constexpr uint32_t kMaxVertices = 4096; // बढ़ाया गया ताकि सारे गेम्स आ सकें
 constexpr uint32_t kVertexFloats = 7;
 constexpr uint32_t kVertexBytes = kVertexFloats * sizeof(float);
-constexpr uint32_t kBackground = 0xFF080B0E;
-constexpr uint32_t kPanel = 0xFF10161B;
-constexpr uint32_t kGreen = 0xFF76B900;
-constexpr uint32_t kWhite = 0xFFF3F6F8;
-constexpr uint32_t kMuted = 0xFFA8B2BA;
-constexpr uint32_t kDim = 0xFF66727C;
 constexpr size_t kMaxImageBytes = 1024 * 1024;
+
+// 🎨 GeForce NOW Original White Theme Colors
+constexpr uint32_t kBackground = 0xFFF5F5F5; // हल्का सफेद/ग्रे बैकग्राउंड
+constexpr uint32_t kPanel = 0xFFFFFFFF;      // सफेद कार्ड्स
+constexpr uint32_t kGreen = 0xFF76B900;      // NVIDIA Green
+constexpr uint32_t kTextDark = 0xFF000000;   // काला टेक्स्ट
+constexpr uint32_t kMuted = 0xFF555555;      // ग्रे टेक्स्ट
+constexpr uint32_t kDim = 0xFF999999;        // हल्का ग्रे
+constexpr uint32_t kHeaderBg = 0xFFFFFFFF;   // सफेद हेडर
 
 struct Vertex { float x, y, r, g, b, u, v; };
 static_assert(sizeof(Vertex) == kVertexBytes);
@@ -47,14 +50,20 @@ XsdkShader pixelShader{};
 uint32_t screenWidth = 1280;
 uint32_t screenHeight = 720;
 
+// 📚 गेम लाइब्रेरी (8 गेम्स)
 struct Game { const char* title; const char* category; const char* url; XsdkTexture texture; bool loaded; };
 Game games[] = {
     {"Cyberpunk 2077", "ACTION RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1091500/48a93d6445a67520ea49833c93dae8f2e68fc540/header_alt_assets_9.jpg?t=1794474878", {}, false},
     {"Apex Legends", "BATTLE ROYALE", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1172470/4219c147f1e094297c726d537518babba7f3ae2d/header.jpg?t=1794958367", {}, false},
     {"The Witcher 3: Wild Hunt", "OPEN-WORLD RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/292030/4b5b1ba5061b8a992cc69ac58b4245434edb4296/header.jpg?t=1793900434", {}, false},
     {"Dota 2", "MOBA", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg?t=1791407503", {}, false},
+    {"Fortnite", "BATTLE ROYALE", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1823530/header.jpg", {}, false},
+    {"Genshin Impact", "ACTION RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1975180/header.jpg", {}, false},
+    {"Valorant", "TACTICAL FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1568120/header.jpg", {}, false},
+    {"GTA V", "OPEN WORLD", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/271590/header.jpg", {}, false}
 };
 constexpr uint32_t kGameCount = sizeof(games) / sizeof(games[0]);
+constexpr uint32_t kVisibleGames = 4; // स्क्रीन पर एक बार में कितने कार्ड दिखेंगे
 
 struct DownloadBuffer { unsigned char* data; size_t size; size_t capacity; bool overflow; };
 
@@ -96,8 +105,6 @@ bool loadGameArt(Game& game) {
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
   curl_easy_cleanup(curl);
   if (result != CURLE_OK || response < 200 || response >= 300 || !data.size) {
-    xsdk_log_write("art: %s download failed (curl=%d HTTP=%ld overflow=%d)", game.title,
-                   static_cast<int>(result), response, data.overflow ? 1 : 0);
     free(data.data);
     return false;
   }
@@ -106,7 +113,6 @@ bool loadGameArt(Game& game) {
   stbi_uc* pixels = stbi_load_from_memory(data.data, static_cast<int>(data.size), &width, &height, &channels, 4);
   free(data.data);
   if (!pixels || width <= 0 || height <= 0 || width > 1024 || height > 1024) {
-    xsdk_log_write("art: %s JPEG decode failed", game.title);
     if (pixels) stbi_image_free(pixels);
     return false;
   }
@@ -115,9 +121,6 @@ bool loadGameArt(Game& game) {
   if (NT_SUCCESS(status)) {
     xsdk_texture_upload(&game.texture, 0, pixels, static_cast<uint32_t>(width) * 4);
     game.loaded = true;
-    xsdk_log_write("art: loaded %s (%dx%d)", game.title, width, height);
-  } else {
-    xsdk_log_write("art: texture allocation failed for %s: 0x%08X", game.title, static_cast<unsigned>(status));
   }
   stbi_image_free(pixels);
   return game.loaded;
@@ -149,33 +152,43 @@ void outlinedRect(float x, float y, float w, float h, float thickness, uint32_t 
   rect(x + w - thickness, y + thickness, thickness, h - 2 * thickness, color);
 }
 
-void buildScene(uint32_t selected) {
+// 🖥️ सफेद थीम वाला नया सीन
+void buildScene(uint32_t selected, uint32_t startIndex) {
   vertexCount = 0;
+  // Main Background (White)
   rect(0, 0, static_cast<float>(screenWidth), static_cast<float>(screenHeight), kBackground);
-  rect(0, 0, static_cast<float>(screenWidth), 76, 0xFF0D1115);
-  rect(0, 74, static_cast<float>(screenWidth), 2, 0xFF222A30);
+  
+  // Top Header
+  rect(0, 0, static_cast<float>(screenWidth), 76, kHeaderBg);
+  rect(0, 74, static_cast<float>(screenWidth), 2, 0xFFDDDDDD); // Light gray separator
+  
+  // GFN Logo Placeholder (Green)
   rect(38, 29, 18, 18, kGreen);
-  rect(43, 34, 8, 8, 0xFF0D1115);
+  rect(43, 34, 8, 8, kHeaderBg);
   rect(43, 54, 8, 3, kGreen);
-  rect(304, 55, 50, 3, kGreen);
-  rect(702, 16, 300, 42, 0xFF171E24);
-  rect(68, 274, 172, 38, kGreen);
+  
+  // Featured Banner
+  rect(38, 98, 1204, 242, kPanel);
+  rect(38, 98, 570, 242, kPanel);
+  rect(38, 98, 4, 242, kGreen); // Green accent on left
+  
+  // Library Header
+  rect(38, 352, 1204, 1, 0xFFDDDDDD);
 
-  // Featured banner image sits beside the dark copy area, as in the streaming app's home screen.
-  rect(38, 98, 1204, 242, 0xFF11171C);
-  rect(38, 98, 570, 242, 0xFF10161B);
-  rect(38, 98, 3, 242, kGreen);
-  rect(608, 98, 634, 242, 0x65080B0E);
-  rect(38, 352, 1204, 1, 0xFF222A30);
-
-  // Favourites and library both use genuine downloadable Steam header artwork.
+  // Game Cards (Scrolling logic)
   constexpr float cardX[] = {38, 344, 650, 956};
   constexpr float cardW = 286;
-  for (uint32_t i = 0; i < kGameCount; ++i) {
+  for (uint32_t i = 0; i < kVisibleGames; ++i) {
+    uint32_t gameIdx = startIndex + i;
+    if (gameIdx >= kGameCount) break;
+
     rect(cardX[i], 403, cardW, 117, kPanel);
-    if (i == selected) outlinedRect(cardX[i] - 2, 401, cardW + 4, 121, 2, kGreen);
-    rect(cardX[i], 522, cardW, 2, i == selected ? kGreen : 0xFF202930);
-    rect(cardX[i], 572, cardW, 80, 0xFF11171C);
+    // Selected card gets Green border
+    if (gameIdx == selected) {
+      outlinedRect(cardX[i] - 2, 401, cardW + 4, 121, 3, kGreen);
+    } else {
+      outlinedRect(cardX[i], 403, cardW, 117, 1, 0xFFCCCCCC); // Light gray border
+    }
   }
 }
 
@@ -186,31 +199,30 @@ void uploadScene() {
   xsdk_gpu_invalidate(xsdk_gpu_address(gpuVertices), words * sizeof(uint32_t));
 }
 
-void drawText(uint32_t selected, uint32_t loadedCount, bool notice, bool loading = false) {
-  xsdk_text_draw(72, 27, 1, kWhite, "GEFORCE NOW");
+// 📝 टेक्स्ट ड्रॉइंग
+void drawText(uint32_t selected, uint32_t startIndex, uint32_t loadedCount, bool notice) {
+  xsdk_text_draw(72, 27, 1, kTextDark, "GEFORCE NOW");
   xsdk_text_draw(304, 28, 1, kGreen, "GAMES");
   xsdk_text_draw(397, 28, 1, kMuted, "MY LIBRARY");
   xsdk_text_draw(540, 28, 1, kMuted, "SETTINGS");
-  xsdk_text_draw(725, 26, 1, kDim, "SEARCH GAMES");
-  xsdk_text_draw(1050, 27, 1, loadedCount ? kGreen : (loading ? kMuted : kDim),
-                 loadedCount ? "ARTWORK ONLINE" : (loading ? "LOADING ART" : "ARTWORK OFFLINE"));
-
+  
   xsdk_text_draw(68, 122, 1, kGreen, "FEATURED GAME");
-  xsdk_text_draw(68, 158, 2, kWhite, "CYBERPUNK 2077");
+  xsdk_text_draw(68, 158, 2, kTextDark, games[startIndex].title); // Hero changes with scroll
   xsdk_text_draw(68, 206, 1, kMuted, "NIGHT CITY NEVER SLEEPS.");
-  xsdk_text_draw(68, 233, 1, kMuted, "REAL GAME ARTWORK  /  ONLINE PREVIEW");
-  xsdk_text_draw(84, 286, 1, 0xFF091007, "A  SELECT GAME TILE");
-  xsdk_text_draw(68, 321, 1, loadedCount ? kGreen : (loading ? kMuted : kDim),
-                 loadedCount ? "ARTWORK LOADED FROM INTERNET" : (loading ? "FETCHING GAME COVER IMAGES..." : "CONNECT CONSOLE TO INTERNET FOR ART"));
-
-  xsdk_text_draw(38, 367, 1, kWhite, "MY FAVOURITES");
+  xsdk_text_draw(68, 233, 1, kMuted, "STREAMING READY");
+  
+  xsdk_text_draw(38, 367, 1, kTextDark, "MY FAVOURITES");
   xsdk_text_draw(1090, 367, 1, kDim, "VIEW ALL  >");
-  xsdk_text_draw(38, 539, 1, kWhite, "MY LIBRARY");
-  xsdk_text_draw(1090, 539, 1, kDim, "RECENTLY PLAYED");
+  
   constexpr int32_t cardX[] = {38, 344, 650, 956};
-  for (uint32_t i = 0; i < kGameCount; ++i) {
-    xsdk_text_draw(cardX[i] + 4, 526, 1, i == selected ? kGreen : kMuted, games[i].title);
+  for (uint32_t i = 0; i < kVisibleGames; ++i) {
+    uint32_t gameIdx = startIndex + i;
+    if (gameIdx >= kGameCount) break;
+    
+    xsdk_text_draw(cardX[i] + 4, 526, 1, gameIdx == selected ? kGreen : kTextDark, games[gameIdx].title);
+    xsdk_text_draw(cardX[i] + 4, 545, 1, kMuted, games[gameIdx].category);
   }
+  
   if (notice) {
     xsdk_text_draw(38, 668, 1, kGreen, "UNOFFICIAL UI  -  NO NVIDIA SIGN-IN OR GAME STREAMING");
   } else {
@@ -220,17 +232,14 @@ void drawText(uint32_t selected, uint32_t loadedCount, bool notice, bool loading
 }  // namespace
 
 int gfx_run(void) {
-  xsdk_log_write("GeForce NOW-inspired Xbox UI: starting");
   const CURLcode curlInit = curl_global_init(CURL_GLOBAL_DEFAULT);
   uint32_t loadedCount = 0;
   NTSTATUS status = xsdk_gpu_open();
-  if (!NT_SUCCESS(status)) {
-    xsdk_log_write("gfx: xsdk_gpu_open failed: 0x%08X", static_cast<unsigned>(status));
-    curl_global_cleanup();
-    return 1;
-  }
+  if (!NT_SUCCESS(status)) { curl_global_cleanup(); return 1; }
+  
   status = xsdk_shader_load(&vertexShader, ui_vert.container, ui_vert.container_bytes);
   if (NT_SUCCESS(status)) status = xsdk_shader_load(&pixelShader, ui_frag.container, ui_frag.container_bytes);
+  
   const XsdkVertexElement layout[] = {
       {XSDK_USAGE_POSITION, 0, XSDK_VERTEX_FLOAT2, 0, 0, {0, 0, 0, 0}, false},
       {XSDK_USAGE_COLOR, 0, XSDK_VERTEX_FLOAT3, 0, 8, {0, 0, 0, 0}, false},
@@ -238,28 +247,21 @@ int gfx_run(void) {
   };
   const uint32_t stride = kVertexBytes;
   if (NT_SUCCESS(status)) status = xsdk_shader_set_vertex_layout(&vertexShader, layout, 3, &stride);
-  if (!NT_SUCCESS(status)) {
-    xsdk_log_write("gfx: shader setup failed: 0x%08X", static_cast<unsigned>(status));
-    xsdk_gpu_close(); curl_global_cleanup(); return 1;
-  }
+  
+  if (!NT_SUCCESS(status)) { xsdk_gpu_close(); curl_global_cleanup(); return 1; }
   status = xsdk_text_open();
-  if (!NT_SUCCESS(status)) {
-    xsdk_log_write("gfx: xsdk_text_open failed: 0x%08X", static_cast<unsigned>(status));
-    xsdk_gpu_close(); curl_global_cleanup(); return 1;
-  }
+  if (!NT_SUCCESS(status)) { xsdk_gpu_close(); curl_global_cleanup(); return 1; }
+  
   gpuVertices = xsdk_gpu_alloc(kMaxVertices * kVertexBytes);
-  if (!gpuVertices) {
-    xsdk_log_write("gfx: vertex allocation failed");
-    xsdk_text_close(); xsdk_gpu_close(); curl_global_cleanup(); return 1;
-  }
+  if (!gpuVertices) { xsdk_text_close(); xsdk_gpu_close(); curl_global_cleanup(); return 1; }
+  
   status = xsdk_present_open(XSDK_DISPLAY_720P, kBuffers, 1, &screenWidth, &screenHeight);
   if (!NT_SUCCESS(status)) {
-    xsdk_log_write("gfx: xsdk_present_open failed: 0x%08X", static_cast<unsigned>(status));
     xsdk_gpu_free(gpuVertices); xsdk_text_close(); xsdk_gpu_close(); curl_global_cleanup(); return 1;
   }
 
-  // Paint a loading state first so network setup never leaves a black screen.
-  buildScene(0);
+  // Loading Screen
+  buildScene(0, 0);
   uploadScene();
   uint32_t loadingAddress = 0;
   status = xsdk_present_begin(&loadingAddress, kBeginTimeoutMs);
@@ -270,18 +272,15 @@ int gfx_run(void) {
     xsdk_built_shader_set_literals(&ui_frag);
     xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuVertices), vertexCount * kVertexBytes);
     xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, vertexCount);
-    drawText(0, 0, false, true);
+    drawText(0, 0, 0, false);
     xsdk_gpu_resolve(loadingAddress, screenWidth, screenHeight, kBackground);
     xsdk_present_end();
-    status = xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
+    xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
   }
-  if (!NT_SUCCESS(status)) {
-    xsdk_log_write("gfx: could not present loading screen: 0x%08X", static_cast<unsigned>(status));
-  }
+
+  // Load Images
   if (curlInit == CURLE_OK) {
     for (uint32_t i = 0; i < kGameCount; ++i) if (loadGameArt(games[i])) ++loadedCount;
-  } else {
-    xsdk_log_write("art: libcurl initialization failed: %d", static_cast<int>(curlInit));
   }
 
   XsdkSampler sampler{};
@@ -296,47 +295,67 @@ int gfx_run(void) {
   xsdk_texture_sampler_state(&samplerState, &sampler);
 
   uint32_t selected = 0;
+  uint32_t startIndex = 0;
   bool notice = false;
   uint16_t previousButtons = 0;
-  buildScene(selected);
+  
+  buildScene(selected, startIndex);
   uploadScene();
-  xsdk_log_write("gfx: display %ux%u; artwork %u/%u; D-pad browse, A select, B exit", screenWidth,
-                 screenHeight, loadedCount, kGameCount);
+  
   for (;;) {
     INPUT_STATE input{};
     if (XamInputGetState(0, 0, &input) != ERROR_SUCCESS) input = {};
     const uint16_t buttons = input.gamepad.buttons;
     const uint16_t pressed = buttons & static_cast<uint16_t>(~previousButtons);
     previousButtons = buttons;
+    
     if (pressed & INPUT_GAMEPAD_B) break;
+    
+    // Scrolling Logic
     if (pressed & (INPUT_GAMEPAD_DPAD_LEFT | INPUT_GAMEPAD_DPAD_RIGHT)) {
-      status = xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
-      if (!NT_SUCCESS(status)) { xsdk_log_write("gfx: fence wait failed: 0x%08X", static_cast<unsigned>(status)); break; }
-      selected = (pressed & INPUT_GAMEPAD_DPAD_LEFT) ? (selected + kGameCount - 1) % kGameCount : (selected + 1) % kGameCount;
-      buildScene(selected);
+      xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
+      
+      if (pressed & INPUT_GAMEPAD_DPAD_LEFT) {
+        selected = (selected == 0) ? kGameCount - 1 : selected - 1;
+      } else {
+        selected = (selected + 1) % kGameCount;
+      }
+      
+      // Adjust startIndex for scrolling
+      if (selected >= kVisibleGames) {
+          startIndex = selected - (kVisibleGames - 1);
+      } else {
+          startIndex = 0;
+      }
+      
+      buildScene(selected, startIndex);
       uploadScene();
       notice = false;
     }
+    
     if (pressed & INPUT_GAMEPAD_A) {
       notice = true;
-      xsdk_log_write("UI tile selected: %s (account login and streaming are not implemented)", games[selected].title);
     }
 
     uint32_t address = 0;
     status = xsdk_present_begin(&address, kBeginTimeoutMs);
-    if (!NT_SUCCESS(status)) { xsdk_log_write("gfx: xsdk_present_begin failed: 0x%08X", static_cast<unsigned>(status)); break; }
+    if (!NT_SUCCESS(status)) break;
+    
     xsdk_gpu_set_target(screenWidth, screenHeight);
     xsdk_gpu_set_shaders(&vertexShader, &pixelShader);
     xsdk_built_shader_set_literals(&ui_vert);
     xsdk_built_shader_set_literals(&ui_frag);
+    
+    // Draw Base Scene
     xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuVertices), vertexCount * kVertexBytes);
     xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, vertexCount);
-    // The artwork uses a compact, immutable second vertex buffer.
+    
+    // Draw Textures (Images)
     {
-      static Vertex coverCpu[kGameCount * 18];
-      static uint32_t coverPacked[kGameCount * 18 * kVertexFloats];
-      static bool coverUploaded = false;
+      static Vertex coverCpu[kVisibleGames * 12]; // Only visible games need quads
+      static uint32_t coverPacked[kVisibleGames * 12 * kVertexFloats];
       if (!gpuCovers) gpuCovers = xsdk_gpu_alloc(sizeof(coverPacked));
+      
       uint32_t coverCount = 0;
       auto appendQuad = [&](uint32_t idx, float x, float y, float w, float h) {
         if (!games[idx].loaded) return;
@@ -345,39 +364,51 @@ int gfx_run(void) {
         const Vertex q[] = {{l,t,1,1,1,0,0},{r,t,1,1,1,1,0},{r,b,1,1,1,1,1},{l,t,1,1,1,0,0},{r,b,1,1,1,1,1},{l,b,1,1,1,0,1}};
         for (unsigned n=0;n<6;++n) coverCpu[coverCount++]=q[n];
       };
-      appendQuad(0, 608, 98, 634, 242);
+      
+      // 1. Draw Hero Image (Featured Game)
+      appendQuad(startIndex, 608, 98, 634, 242);
+      
+      // 2. Draw Game Cards
       constexpr float cardX[] = {38, 344, 650, 956};
-      for (uint32_t i=0;i<kGameCount;++i) { appendQuad(i,cardX[i],403,286,117); appendQuad(i,cardX[i],572,286,80); }
-      if (!coverUploaded) memcpy(coverPacked, coverCpu, coverCount * kVertexBytes);
+      for (uint32_t i = 0; i < kVisibleGames; ++i) {
+        uint32_t gameIdx = startIndex + i;
+        if (gameIdx >= kGameCount) break;
+        appendQuad(gameIdx, cardX[i], 403, 286, 117);
+      }
+      
       if (coverCount && gpuCovers) {
-        if (!coverUploaded) {
-          for (uint32_t n=0;n<coverCount*kVertexFloats;++n) gpuCovers[n]=coverPacked[n];
-          xsdk_gpu_invalidate(xsdk_gpu_address(gpuCovers),coverCount*kVertexBytes);
-          coverUploaded = true;
+        memcpy(coverPacked, coverCpu, coverCount * kVertexBytes);
+        for (uint32_t n=0;n<coverCount*kVertexFloats;++n) gpuCovers[n]=coverPacked[n];
+        xsdk_gpu_invalidate(xsdk_gpu_address(gpuCovers),coverCount*kVertexBytes);
+        
+        // Draw Hero
+        if (games[startIndex].loaded) {
+            xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers), 6 * kVertexBytes);
+            xsdk_gpu_set_texture(0, &games[startIndex].texture, &samplerState);
+            xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
         }
-        xsdk_gpu_set_vertices(0,xsdk_gpu_address(gpuCovers),coverCount*kVertexBytes);
-        if (games[0].loaded) {
-          xsdk_gpu_set_texture(0,&games[0].texture,&samplerState);
-          xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST,6);
-        }
-        for (uint32_t i=0;i<kGameCount;++i) {
-          if (!games[i].loaded) continue;
-          // The hero uses six vertices, then each preceding loaded game contributes two card quads.
-          uint32_t gameOffset = games[0].loaded ? 6 : 0;
-          for (uint32_t j=0;j<i;++j) if (games[j].loaded) gameOffset += 12;
-          xsdk_gpu_set_vertices(0,xsdk_gpu_address(gpuCovers)+gameOffset*kVertexBytes,(coverCount-gameOffset)*kVertexBytes);
-          xsdk_gpu_set_texture(0,&games[i].texture,&samplerState);
-          xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST,12);
+        
+        // Draw Cards
+        uint32_t offset = 6;
+        for (uint32_t i = 0; i < kVisibleGames; ++i) {
+            uint32_t gameIdx = startIndex + i;
+            if (gameIdx >= kGameCount) break;
+            if (games[gameIdx].loaded) {
+                xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers) + offset * kVertexBytes, 6 * kVertexBytes);
+                xsdk_gpu_set_texture(0, &games[gameIdx].texture, &samplerState);
+                xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
+                offset += 6;
+            }
         }
       }
     }
-    drawText(selected, loadedCount, notice);
+    
+    drawText(selected, startIndex, loadedCount, notice);
     xsdk_gpu_resolve(address, screenWidth, screenHeight, kBackground);
     xsdk_present_end();
   }
 
-  status = xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
-  if (!NT_SUCCESS(status)) xsdk_log_write("gfx: final fence wait failed: 0x%08X", static_cast<unsigned>(status));
+  xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
   xsdk_text_close();
   xsdk_present_close();
   xsdk_gpu_free(gpuVertices);
@@ -386,9 +417,7 @@ int gfx_run(void) {
   for (uint32_t i = 0; i < kGameCount; ++i) if (games[i].loaded) xsdk_texture_free(&games[i].texture);
   xsdk_shader_free(&pixelShader);
   xsdk_shader_free(&vertexShader);
-  status = xsdk_gpu_close();
+  xsdk_gpu_close();
   curl_global_cleanup();
-  if (!NT_SUCCESS(status)) xsdk_log_write("gfx: xsdk_gpu_close failed: 0x%08X", static_cast<unsigned>(status));
-  xsdk_log_write("GeForce NOW-inspired Xbox UI: closed");
   return 0;
 }
