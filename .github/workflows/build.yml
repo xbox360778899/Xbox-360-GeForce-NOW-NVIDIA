@@ -25,10 +25,12 @@ jobs:
             curl xz-utils patch python3 \
             cmake ninja-build git glslang-tools
 
-      - name: Fetch XSDK
+      - name: Fetch XSDK and networking libraries
         run: |
-          git clone --depth 1 \
-            https://github.com/xenosworks/xsdk.git xsdk
+          git clone --depth 1 https://github.com/xenosworks/xsdk.git xsdk
+          mkdir -p deps
+          git clone --depth 1 --recurse-submodules --shallow-submodules --branch xenon https://github.com/xenosworks/mbedtls-xenon.git deps/mbedtls-xenon
+          git clone --depth 1 --branch xenon https://github.com/xenosworks/curl-xenon.git deps/curl-xenon
 
       - name: Cache XSDK toolchain
         uses: actions/cache@v4
@@ -64,10 +66,12 @@ jobs:
         run: |
           cmake --build build --parallel 2
 
-      - name: Upload GeForce NOW UI XEX
+      - name: Upload GeForce NOW UI and HTTPS CA bundle
         uses: actions/upload-artifact@v4
         with:
           name: geforce-now-xbox360-ui
-          path: build/geforce_now_ui.xex
+          path: |
+            build/geforce_now_ui.xex
+            build/cacert.pem
           if-no-files-found: error
           
