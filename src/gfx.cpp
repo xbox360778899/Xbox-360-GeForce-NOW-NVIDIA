@@ -459,5 +459,54 @@ int gfx_run(void) {
           appendQuad(i, x, y, cardW, cardH);
         }
         
-        if (coverCount > 0) {
-          memcpy(coverPacked, co
+                if (coverCount > 0) {
+          memcpy(coverPacked, coverCpu, coverCount * kVertexBytes);
+          for (uint32_t n=0; n<coverCount*kVertexFloats; ++n) {
+            gpuCovers[n] = coverPacked[n];
+          }
+          xsdk_gpu_invalidate(xsdk_gpu_address(gpuCovers), coverCount*kVertexBytes);
+        }
+        needCoverUpdate = false;
+      }
+      
+      if (games[selectedGame].loaded) {
+          xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers), 6 * kVertexBytes);
+          xsdk_gpu_set_texture(0, &games[selectedGame].texture, &samplerState);
+          xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
+      }
+      
+      uint32_t offset = 6;
+      for (uint32_t i = 0; i < kGameCount; ++i) {
+          int r = i / kColumns;
+          int c = i % kColumns;
+          float y = 403 + r * rowH - gridScrollY;
+
+          if (y + cardH < 400 || y > 620) continue;
+
+          if (games[i].loaded) {
+              xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers) + offset * kVertexBytes, 6 * kVertexBytes);
+              xsdk_gpu_set_texture(0, &games[i].texture, &samplerState);
+              xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
+              offset += 6;
+          }
+      }
+    }
+    
+    drawText(selectedGame, gridScrollY, notice);
+    xsdk_gpu_resolve(address, screenWidth, screenHeight, currentTheme.background);
+    xsdk_present_end();
+    
+    xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs); 
+  }
+
+  xsdk_text_close();
+  xsdk_present_close();
+  xsdk_gpu_free(gpuVertices);
+  if (gpuCovers) { xsdk_gpu_free(gpuCovers); gpuCovers = nullptr; }
+  for (uint32_t i = 0; i < kGameCount; ++i) if (games[i].loaded) xsdk_texture_free(&games[i].texture);
+  xsdk_shader_free(&pixelShader);
+  xsdk_shader_free(&vertexShader);
+  xsdk_gpu_close();
+  curl_global_cleanup();
+  return 0;
+}
