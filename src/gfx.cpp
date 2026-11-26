@@ -29,9 +29,6 @@ constexpr uint32_t kVertexFloats = 7;
 constexpr uint32_t kVertexBytes = kVertexFloats * sizeof(float);
 constexpr size_t kMaxImageBytes = 1024 * 1024;
 
-// ==========================================
-// 🎨 डायनामिक थीम (Light / Dark Mode)
-// ==========================================
 struct Theme {
     uint32_t background;
     uint32_t panel;
@@ -45,11 +42,8 @@ Theme darkTheme  = { 0xFF121212, 0xFF1E1E1E, 0xFF181818, 0xFFFFFFFF, 0xFFAAAAAA,
 
 bool isDarkMode = false;
 Theme currentTheme = lightTheme;
-const uint32_t kGreen = 0xFF76B900; // NVIDIA Green
+const uint32_t kGreen = 0xFF76B900;
 
-// ==========================================
-// 🧭 मेनू स्टेट (Tabs)
-// ==========================================
 enum class Tab { HOME, LIBRARY, SETTINGS };
 Tab currentTab = Tab::HOME;
 int settingsSelection = 0;
@@ -75,11 +69,27 @@ Game games[] = {
     {"Dota 2", "MOBA", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/570/header.jpg", {}, false},
     {"GTA V", "OPEN WORLD", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/271590/header.jpg", {}, false},
     {"Elden Ring", "ACTION RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1245620/header.jpg", {}, false},
-    {"Red Dead Redemption 2", "ACTION ADVENTURE", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1174180/header.jpg", {}, false},
-    {"Counter-Strike 2", "FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", {}, false}
+    {"Red Dead Redemption 2", "ACTION ADV", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1174180/header.jpg", {}, false},
+    {"Counter-Strike 2", "FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/header.jpg", {}, false},
+    {"Fall Guys", "PARTY", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1097150/header.jpg", {}, false},
+    {"Baldur's Gate 3", "RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1086940/header.jpg", {}, false},
+    {"Overwatch 2", "FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/2357570/header.jpg", {}, false},
+    {"Terraria", "SANDBOX", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/105600/header.jpg", {}, false},
+    {"SMITE", "MOBA", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/386360/header.jpg", {}, false},
+    {"PUBG", "BATTLE ROYALE", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/578080/header.jpg", {}, false},
+    {"Destiny 2", "FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1085660/header.jpg", {}, false},
+    {"Rust", "SURVIVAL", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/252490/header.jpg", {}, false},
+    {"Warframe", "ACTION RPG", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/230410/header.jpg", {}, false},
+    {"Rainbow Six Siege", "TACTICAL FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/359550/header.jpg", {}, false},
+    {"Titanfall 2", "FPS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1237970/header.jpg", {}, false},
+    {"Rocket League", "SPORTS", "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/252950/header.jpg", {}, false}
 };
 constexpr uint32_t kGameCount = sizeof(games) / sizeof(games[0]);
-constexpr uint32_t kVisibleGames = 4;
+constexpr uint32_t kColumns = 4;
+constexpr float cardW = 286.0f;
+constexpr float cardH = 117.0f;
+constexpr float gapX = 20.0f;
+constexpr float rowH = 160.0f;
 
 struct DownloadBuffer { unsigned char* data; size_t size; size_t capacity; bool overflow; };
 
@@ -141,6 +151,32 @@ bool loadGameArt(Game& game) {
   return game.loaded;
 }
 
+// 🧠 स्मार्ट मेमोरी मैनेजर (Smart Memory Manager)
+void manageMemory(float scrollY, uint32_t selectedGame) {
+    for (uint32_t i = 0; i < kGameCount; ++i) {
+        int r = i / kColumns;
+        float y = 403 + r * rowH - scrollY;
+        
+        // अगर इमेज स्क्रीन के पास है (या हीरो गेम है)
+        bool isNearScreen = (y + cardH > 100 && y < 800); 
+        bool isHero = (i == selectedGame);
+        
+        if (isNearScreen || isHero) {
+            // लोड करें अगर लोडेड नहीं है
+            if (!games[i].loaded) {
+                loadGameArt(games[i]);
+            }
+        } else {
+            // रैम से डिलीट करें अगर स्क्रीन से दूर है
+            if (games[i].loaded) {
+                xsdk_texture_free(&games[i].texture);
+                games[i].loaded = false;
+                games[i].texture = {}; // रीसेट
+            }
+        }
+    }
+}
+
 float channel(uint32_t color, unsigned shift) { return static_cast<float>((color >> shift) & 0xFF) / 255.0f; }
 
 void vertex(float x, float y, uint32_t color, float u = -1.0f, float v = -1.0f) {
@@ -167,50 +203,43 @@ void outlinedRect(float x, float y, float w, float h, float thickness, uint32_t 
   rect(x + w - thickness, y + thickness, thickness, h - 2 * thickness, color);
 }
 
-// ==========================================
-// 🖥️ सीन बिल्डर (UI लेआउट)
-// ==========================================
-void buildScene(uint32_t selected, uint32_t startIndex) {
+void buildScene(uint32_t selectedGame, float gridScrollY) {
   vertexCount = 0;
   rect(0, 0, static_cast<float>(screenWidth), static_cast<float>(screenHeight), currentTheme.background);
   rect(0, 0, static_cast<float>(screenWidth), 76, currentTheme.headerBg);
   rect(0, 74, static_cast<float>(screenWidth), 2, currentTheme.border);
   
-  // Logo
   rect(38, 29, 18, 18, kGreen);
   rect(43, 34, 8, 8, currentTheme.headerBg);
   rect(43, 54, 8, 3, kGreen);
 
   if (currentTab == Tab::HOME) {
-    // Featured Banner
     rect(38, 98, 1204, 242, currentTheme.panel);
     rect(38, 98, 570, 242, currentTheme.panel);
     rect(38, 98, 4, 242, kGreen);
     rect(38, 352, 1204, 1, currentTheme.border);
 
-    // Game Cards
-    constexpr float cardX[] = {38, 344, 650, 956};
-    constexpr float cardW = 286;
-    for (uint32_t i = 0; i < kVisibleGames; ++i) {
-      uint32_t gameIdx = startIndex + i;
-      if (gameIdx >= kGameCount) break;
+    for (uint32_t i = 0; i < kGameCount; ++i) {
+      int r = i / kColumns;
+      int c = i % kColumns;
+      float x = 38 + c * (cardW + gapX);
+      float y = 403 + r * rowH - gridScrollY;
 
-      rect(cardX[i], 403, cardW, 117, currentTheme.panel);
-      if (gameIdx == selected) {
-        outlinedRect(cardX[i] - 2, 401, cardW + 4, 121, 3, kGreen);
+      if (y + cardH < 400 || y > 620) continue;
+
+      rect(x, y, cardW, cardH, currentTheme.panel);
+      if (i == selectedGame) {
+        outlinedRect(x - 2, y - 2, cardW + 4, cardH + 4, 3, kGreen);
       } else {
-        outlinedRect(cardX[i], 403, cardW, 117, 1, currentTheme.border);
+        outlinedRect(x, y, cardW, cardH, 1, currentTheme.border);
       }
     }
   } else if (currentTab == Tab::SETTINGS) {
-    // Settings Layout
     rect(200, 120, 880, 500, currentTheme.panel);
     outlinedRect(200, 120, 880, 500, 2, currentTheme.border);
-    
-    // Settings items (Highlighted if selected)
     for(int i=0; i<3; i++) {
         if (i == settingsSelection) {
-            rect(210, 150 + (i*80), 860, 60, 0x2276B900); // Light green highlight
+            rect(210, 150 + (i*80), 860, 60, 0x2276B900);
             rect(210, 150 + (i*80), 4, 60, kGreen);
         }
     }
@@ -224,11 +253,7 @@ void uploadScene() {
   xsdk_gpu_invalidate(xsdk_gpu_address(gpuVertices), words * sizeof(uint32_t));
 }
 
-// ==========================================
-// 📝 टेक्स्ट रेंडरिंग (डायनामिक)
-// ==========================================
-void drawText(uint32_t selected, uint32_t startIndex, bool notice) {
-  // Top Tabs
+void drawText(uint32_t selectedGame, float gridScrollY, bool notice) {
   xsdk_text_draw(72, 27, 1, currentTheme.textMain, "GEFORCE NOW");
   xsdk_text_draw(304, 28, 1, currentTab == Tab::HOME ? kGreen : currentTheme.textMuted, "GAMES");
   xsdk_text_draw(397, 28, 1, currentTab == Tab::LIBRARY ? kGreen : currentTheme.textMuted, "MY LIBRARY");
@@ -236,22 +261,27 @@ void drawText(uint32_t selected, uint32_t startIndex, bool notice) {
   
   if (currentTab == Tab::HOME) {
     xsdk_text_draw(68, 122, 1, kGreen, "FEATURED GAME");
-    xsdk_text_draw(68, 158, 2, currentTheme.textMain, games[startIndex].title);
-    xsdk_text_draw(68, 206, 1, currentTheme.textMuted, games[startIndex].category);
+    xsdk_text_draw(68, 158, 2, currentTheme.textMain, games[selectedGame].title);
+    xsdk_text_draw(68, 206, 1, currentTheme.textMuted, games[selectedGame].category);
     xsdk_text_draw(68, 233, 1, currentTheme.textMuted, "STREAMING READY");
     
-    xsdk_text_draw(38, 367, 1, currentTheme.textMain, "MY FAVOURITES");
+    xsdk_text_draw(38, 367, 1, currentTheme.textMain, "ALL GAMES");
     xsdk_text_draw(1090, 367, 1, currentTheme.textMuted, "VIEW ALL  >");
     
-    constexpr int32_t cardX[] = {38, 344, 650, 956};
-    for (uint32_t i = 0; i < kVisibleGames; ++i) {
-      uint32_t gameIdx = startIndex + i;
-      if (gameIdx >= kGameCount) break;
-      xsdk_text_draw(cardX[i] + 4, 526, 1, gameIdx == selected ? kGreen : currentTheme.textMain, games[gameIdx].title);
-      xsdk_text_draw(cardX[i] + 4, 545, 1, currentTheme.textMuted, games[gameIdx].category);
+    for (uint32_t i = 0; i < kGameCount; ++i) {
+      int r = i / kColumns;
+      int c = i % kColumns;
+      float x = 38 + c * (cardW + gapX);
+      float y = 403 + r * rowH - gridScrollY;
+
+      if (y + cardH < 400 || y > 620) continue;
+
+      xsdk_text_draw(x + 4, y + cardH + 6, 1, i == selectedGame ? kGreen : currentTheme.textMain, games[i].title);
+      xsdk_text_draw(x + 4, y + cardH + 25, 1, currentTheme.textMuted, games[i].category);
     }
+
     if (notice) xsdk_text_draw(38, 668, 1, kGreen, "GAME STREAMING IS NOT IMPLEMENTED IN THIS DEMO");
-    else xsdk_text_draw(38, 668, 1, currentTheme.textMuted, "LB / RB  CHANGE TAB       D-PAD  BROWSE       A  SELECT       B  EXIT");
+    else xsdk_text_draw(38, 668, 1, currentTheme.textMuted, "LB / RB  CHANGE TAB     D-PAD  SCROLL     A  SELECT     B  EXIT");
 
   } else if (currentTab == Tab::LIBRARY) {
     xsdk_text_draw(38, 150, 2, currentTheme.textMain, "MY LIBRARY");
@@ -261,15 +291,12 @@ void drawText(uint32_t selected, uint32_t startIndex, bool notice) {
   } else if (currentTab == Tab::SETTINGS) {
     xsdk_text_draw(230, 130, 2, currentTheme.textMain, "SETTINGS");
     
-    // Option 1: Theme
     xsdk_text_draw(240, 170, 1, settingsSelection == 0 ? kGreen : currentTheme.textMain, "APP THEME");
     xsdk_text_draw(900, 170, 1, currentTheme.textMuted, isDarkMode ? "DARK MODE" : "LIGHT MODE");
 
-    // Option 2: Vibration
     xsdk_text_draw(240, 250, 1, settingsSelection == 1 ? kGreen : currentTheme.textMain, "CONTROLLER VIBRATION");
     xsdk_text_draw(900, 250, 1, currentTheme.textMuted, vibrationEnabled ? "ON" : "OFF");
 
-    // Option 3: Resolution
     xsdk_text_draw(240, 330, 1, settingsSelection == 2 ? kGreen : currentTheme.textMain, "STREAMING QUALITY");
     xsdk_text_draw(900, 330, 1, currentTheme.textMuted, "1080P 60FPS");
 
@@ -302,9 +329,6 @@ int gfx_run(void) {
   
   status = xsdk_present_open(XSDK_DISPLAY_720P, kBuffers, 1, &screenWidth, &screenHeight);
 
-  // Image Loading
-  if (curlInit == CURLE_OK) for (uint32_t i = 0; i < kGameCount; ++i) loadGameArt(games[i]);
-
   XsdkSampler sampler{};
   sampler.mag_filter = XSDK_FILTER_LINEAR;
   sampler.min_filter = XSDK_FILTER_LINEAR;
@@ -317,12 +341,15 @@ int gfx_run(void) {
   xsdk_texture_sampler_state(&samplerState, &sampler);
 
   uint32_t selectedGame = 0;
-  uint32_t startIndex = 0;
+  float gridScrollY = 0.0f;
   bool notice = false;
   uint16_t previousButtons = 0;
   bool needCoverUpdate = true; 
 
-  buildScene(selectedGame, startIndex);
+  // पहली बार सिर्फ जरुरी इमेजेज लोड करें
+  manageMemory(gridScrollY, selectedGame);
+
+  buildScene(selectedGame, gridScrollY);
   uploadScene();
   
   for (;;) {
@@ -334,14 +361,13 @@ int gfx_run(void) {
     
     if (pressed & INPUT_GAMEPAD_B) {
         if (currentTab != Tab::HOME) {
-            currentTab = Tab::HOME; // Go back to Home
+            currentTab = Tab::HOME;
             needCoverUpdate = true;
         } else {
-            break; // Exit App
+            break;
         }
     }
 
-    // Tab Switching (LB / RB)
     if (pressed & INPUT_GAMEPAD_LEFT_SHOULDER) {
         if (currentTab == Tab::SETTINGS) currentTab = Tab::LIBRARY;
         else if (currentTab == Tab::LIBRARY) currentTab = Tab::HOME;
@@ -353,38 +379,52 @@ int gfx_run(void) {
         needCoverUpdate = true;
     }
     
-    // Input Logic based on Tab
     if (currentTab == Tab::HOME) {
-        if (pressed & (INPUT_GAMEPAD_DPAD_LEFT | INPUT_GAMEPAD_DPAD_RIGHT)) {
-            if (pressed & INPUT_GAMEPAD_DPAD_LEFT) selectedGame = (selectedGame == 0) ? kGameCount - 1 : selectedGame - 1;
-            else selectedGame = (selectedGame + 1) % kGameCount;
-            
-            startIndex = (selectedGame >= kVisibleGames) ? (selectedGame - (kVisibleGames - 1)) : 0;
-            needCoverUpdate = true;
+        bool moved = false;
+        if (pressed & INPUT_GAMEPAD_DPAD_RIGHT) { selectedGame = (selectedGame + 1) % kGameCount; moved = true; }
+        if (pressed & INPUT_GAMEPAD_DPAD_LEFT) { selectedGame = (selectedGame == 0) ? kGameCount - 1 : selectedGame - 1; moved = true; }
+        if (pressed & INPUT_GAMEPAD_DPAD_DOWN) {
+            if (selectedGame + kColumns < kGameCount) { selectedGame += kColumns; moved = true; }
+        }
+        if (pressed & INPUT_GAMEPAD_DPAD_UP) {
+            if (selectedGame >= kColumns) { selectedGame -= kColumns; moved = true; }
+        }
+        
+        if (moved) {
             notice = false;
+            
+            int row = selectedGame / kColumns;
+            float targetY = 403 + row * rowH;
+            float gridTop = 400;
+            float gridBottom = 620;
+
+            if (targetY < gridTop + gridScrollY) gridScrollY = targetY - gridTop;
+            if (targetY + cardH > gridBottom + gridScrollY) gridScrollY = targetY + cardH - gridBottom;
+            
+            float maxScroll = (kGameCount / kColumns) * rowH + cardH - (gridBottom - gridTop);
+            if (gridScrollY < 0) gridScrollY = 0;
+            if (gridScrollY > maxScroll) gridScrollY = maxScroll;
+            
+            // जब भी स्क्रॉल हो, मेमोरी चेक करें (नई लोड करो, पुरानी डिलीट करो)
+            manageMemory(gridScrollY, selectedGame);
+            needCoverUpdate = true;
         }
         if (pressed & INPUT_GAMEPAD_A) notice = true;
     } 
     else if (currentTab == Tab::SETTINGS) {
-        if (pressed & INPUT_GAMEPAD_DPAD_DOWN) {
-            settingsSelection = (settingsSelection + 1) % 3;
-        }
-        if (pressed & INPUT_GAMEPAD_DPAD_UP) {
-            settingsSelection = (settingsSelection == 0) ? 2 : settingsSelection - 1;
-        }
+        if (pressed & INPUT_GAMEPAD_DPAD_DOWN) settingsSelection = (settingsSelection + 1) % 3;
+        if (pressed & INPUT_GAMEPAD_DPAD_UP) settingsSelection = (settingsSelection == 0) ? 2 : settingsSelection - 1;
         if (pressed & INPUT_GAMEPAD_A) {
             if (settingsSelection == 0) {
-                // Toggle Theme
                 isDarkMode = !isDarkMode;
                 currentTheme = isDarkMode ? darkTheme : lightTheme;
             } else if (settingsSelection == 1) {
-                // Toggle Vibration
                 vibrationEnabled = !vibrationEnabled;
             }
         }
     }
 
-    buildScene(selectedGame, startIndex);
+    buildScene(selectedGame, gridScrollY);
     uploadScene();
 
     uint32_t address = 0;
@@ -399,10 +439,9 @@ int gfx_run(void) {
     xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuVertices), vertexCount * kVertexBytes);
     xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, vertexCount);
     
-    // Render Textures ONLY on Home Tab
     if (currentTab == Tab::HOME) {
-      static Vertex coverCpu[kVisibleGames * 12];
-      static uint32_t coverPacked[kVisibleGames * 12 * kVertexFloats];
+      static Vertex coverCpu[64 * 6];
+      static uint32_t coverPacked[64 * 6 * kVertexFloats];
       
       if (needCoverUpdate) {
         uint32_t coverCount = 0;
@@ -414,56 +453,7 @@ int gfx_run(void) {
           for (unsigned n=0;n<6;++n) coverCpu[coverCount++]=q[n];
         };
         
-        appendQuad(startIndex, 608, 98, 634, 242);
-        constexpr float cardX[] = {38, 344, 650, 956};
-        for (uint32_t i = 0; i < kVisibleGames; ++i) {
-          uint32_t gameIdx = startIndex + i;
-          if (gameIdx >= kGameCount) break;
-          appendQuad(gameIdx, cardX[i], 403, 286, 117);
-        }
+        appendQuad(selectedGame, 608, 98, 634, 242);
         
-        if (coverCount > 0) {
-          memcpy(coverPacked, coverCpu, coverCount * kVertexBytes);
-          for (uint32_t n=0;n<coverCount*kVertexFloats;++n) gpuCovers[n]=coverPacked[n];
-          xsdk_gpu_invalidate(xsdk_gpu_address(gpuCovers), coverCount*kVertexBytes);
-        }
-        needCoverUpdate = false;
-      }
-      
-      if (games[startIndex].loaded) {
-          xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers), 6 * kVertexBytes);
-          xsdk_gpu_set_texture(0, &games[startIndex].texture, &samplerState);
-          xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
-      }
-      
-      uint32_t offset = 6;
-      for (uint32_t i = 0; i < kVisibleGames; ++i) {
-          uint32_t gameIdx = startIndex + i;
-          if (gameIdx >= kGameCount) break;
-          if (games[gameIdx].loaded) {
-              xsdk_gpu_set_vertices(0, xsdk_gpu_address(gpuCovers) + offset * kVertexBytes, 6 * kVertexBytes);
-              xsdk_gpu_set_texture(0, &games[gameIdx].texture, &samplerState);
-              xsdk_gpu_draw(XSDK_PRIMITIVE_TRIANGLE_LIST, 6);
-              offset += 6;
-          }
-      }
-    }
-    
-    drawText(selectedGame, startIndex, notice);
-    xsdk_gpu_resolve(address, screenWidth, screenHeight, currentTheme.background);
-    xsdk_present_end();
-    
-    xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs); 
-  }
-
-  xsdk_text_close();
-  xsdk_present_close();
-  xsdk_gpu_free(gpuVertices);
-  if (gpuCovers) { xsdk_gpu_free(gpuCovers); gpuCovers = nullptr; }
-  for (uint32_t i = 0; i < kGameCount; ++i) if (games[i].loaded) xsdk_texture_free(&games[i].texture);
-  xsdk_shader_free(&pixelShader);
-  xsdk_shader_free(&vertexShader);
-  xsdk_gpu_close();
-  curl_global_cleanup();
-  return 0;
-}
+        for (uint32_t i = 0; i < kGameCount; ++i) {
+     
