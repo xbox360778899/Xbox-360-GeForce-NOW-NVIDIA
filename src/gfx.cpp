@@ -151,27 +151,23 @@ bool loadGameArt(Game& game) {
   return game.loaded;
 }
 
-// 🧠 स्मार्ट मेमोरी मैनेजर (Smart Memory Manager)
 void manageMemory(float scrollY, uint32_t selectedGame) {
     for (uint32_t i = 0; i < kGameCount; ++i) {
         int r = i / kColumns;
         float y = 403 + r * rowH - scrollY;
         
-        // अगर इमेज स्क्रीन के पास है (या हीरो गेम है)
         bool isNearScreen = (y + cardH > 100 && y < 800); 
         bool isHero = (i == selectedGame);
         
         if (isNearScreen || isHero) {
-            // लोड करें अगर लोडेड नहीं है
             if (!games[i].loaded) {
                 loadGameArt(games[i]);
             }
         } else {
-            // रैम से डिलीट करें अगर स्क्रीन से दूर है
             if (games[i].loaded) {
                 xsdk_texture_free(&games[i].texture);
                 games[i].loaded = false;
-                games[i].texture = {}; // रीसेट
+                games[i].texture = {}; 
             }
         }
     }
@@ -346,7 +342,6 @@ int gfx_run(void) {
   uint16_t previousButtons = 0;
   bool needCoverUpdate = true; 
 
-  // पहली बार सिर्फ जरुरी इमेजेज लोड करें
   manageMemory(gridScrollY, selectedGame);
 
   buildScene(selectedGame, gridScrollY);
@@ -405,7 +400,6 @@ int gfx_run(void) {
             if (gridScrollY < 0) gridScrollY = 0;
             if (gridScrollY > maxScroll) gridScrollY = maxScroll;
             
-            // जब भी स्क्रॉल हो, मेमोरी चेक करें (नई लोड करो, पुरानी डिलीट करो)
             manageMemory(gridScrollY, selectedGame);
             needCoverUpdate = true;
         }
@@ -456,4 +450,14 @@ int gfx_run(void) {
         appendQuad(selectedGame, 608, 98, 634, 242);
         
         for (uint32_t i = 0; i < kGameCount; ++i) {
-     
+          int r = i / kColumns;
+          int c = i % kColumns;
+          float x = 38 + c * (cardW + gapX);
+          float y = 403 + r * rowH - gridScrollY;
+
+          if (y + cardH < 400 || y > 620) continue;
+          appendQuad(i, x, y, cardW, cardH);
+        }
+        
+        if (coverCount > 0) {
+          memcpy(coverPacked, co
