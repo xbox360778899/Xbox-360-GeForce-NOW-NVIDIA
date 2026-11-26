@@ -1,5 +1,5 @@
 
-name: Build Xbox 360 Cloud Client
+name: Build GeForce NOW UI Preview
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
             build-essential bison flex texinfo \
             libgmp-dev libmpfr-dev libmpc-dev \
             curl xz-utils patch python3 \
-            cmake ninja-build git
+            cmake ninja-build git glslang-tools
 
       - name: Fetch XSDK
         run: |
@@ -43,26 +43,31 @@ jobs:
           JOBS=2 \
           bash xsdk/tools/toolchain/build.sh
 
+      - name: Configure GLSL compiler
+        run: |
+          test -x "$HOME/xsdk-gcc/bin/glslang" || \
+            ln -s "$(command -v glslangValidator)" "$HOME/xsdk-gcc/bin/glslang"
+
       - name: Build XSDK libraries
         run: |
           make -C xsdk -j2 \
             TOOLCHAIN=$HOME/xsdk-gcc/bin/powerpc-xsdk-elf-
 
-      - name: Configure Cloud Client
+      - name: Configure GeForce NOW UI
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/xsdk/cmake/xsdk.cmake \
             -DXSDK_TOOLCHAIN=$HOME/xsdk-gcc \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-      - name: Build Cloud Client XEX
+      - name: Build GeForce NOW UI XEX
         run: |
           cmake --build build --parallel 2
 
-      - name: Upload Cloud Client XEX
+      - name: Upload GeForce NOW UI XEX
         uses: actions/upload-artifact@v4
         with:
-          name: xbox360-cloud-client
-          path: build/xbox360_cloud.xex
+          name: geforce-now-xbox360-ui
+          path: build/geforce_now_ui.xex
           if-no-files-found: error
           
