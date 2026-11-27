@@ -10,6 +10,7 @@
 
 #include <curl/curl.h>
 #include "xsdk/kernel.h"
+#include "xsdk/log.h"
 
 namespace {
 constexpr char kCloudMatchBase[] = "https://prod.cloudmatchbeta.nvidiagrid.net";
@@ -388,6 +389,27 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
   curl_slist_free_all(headers);
   if (!ok) return false;
 
+  // NVIDIA catalog responses may contain a large account-specific library.
+  // Log a bounded raw prefix for diagnostics without flooding the console log.
+  constexpr size_t kCatalogLogLimit = 2048;
+  constexpr size_t kCatalogLogChunk = 240;
+  const size_t logBytes = std::min(response.text.size(), kCatalogLogLimit);
+  xsdk_log_write("catalog: raw GraphQL response, %lu bytes; logging first %lu bytes",
+                 static_cast<unsigned long>(response.text.size()),
+                 static_cast<unsigned long>(logBytes));
+  for (size_t offset = 0, chunk = 0; offset < logBytes;
+       offset += kCatalogLogChunk, ++chunk) {
+    char line[kCatalogLogChunk + 1];
+    const size_t count = std::min(kCatalogLogChunk, logBytes - offset);
+    std::memcpy(line, response.text.data() + offset, count);
+    line[count] = '\0';
+    xsdk_log_write("catalog raw %lu: %s",
+                   static_cast<unsigned long>(chunk), line);
+  }
+  if (logBytes < response.text.size()) {
+    xsdk_log_write("catalog: raw response truncated in log; inspect only on a trusted device");
+  }
+
   std::string errors;
   bool isString = false;
   if (getRawField(response.text, "errors", errors, isString)) {
@@ -426,14 +448,15 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
   const std::string requestedTitle = normalizeTitle(gameTitle);
 
   size_t resultCount = 0;
-  bool matchedTitleWithoutId = false;
+  size_t titleMatchCount = 0;
   size_t pos = 0;
   std::string item;
   while (nextArrayObject(items, pos, item)) {
     ++resultCount;
     std::string title;
     if (!getStringField(item, "title", title) ||
-        normalizeTitle(title) != requestedTitle) continue;
+        normalizeTitle(title).find(requestedTitle) == std::string::npos) continue;
+    ++titleMatchCount;
     std::string itemId;
     getFlexibleString(item, "id", itemId);
     std::string variants;
@@ -453,22 +476,28 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
         }
       }
     }
-    if (!numericVariantId.empty()) appId = numericVariantId;
-    else if (isNumericId(itemId)) appId = itemId;
-    else if (!firstVariantId.empty()) appId = firstVariantId;
-    else appId = itemId;
-    if (!appId.empty()) return true;
-    matchedTitleWithoutId = true;
+    std::string candidateId;
+    if (!numericVariantId.empty()) candidateId = numericVariantId;
+    else if (isNumericId(itemId)) candidateId = itemId;
+    else if (!firstVariantId.empty()) candidateId = firstVariantId;
+    else candidateId = itemId;
+    if (!candidateId.empty()) {
+      appId = candidateId;
+      xsdk_log_write("catalog: matched title '%s'; selected app ID '%s'",
+                     title.c_str(), appId.c_str());
+      return true;
+    }
   }
   if (resultCount == 0) {
     g_error = std::string("NVIDIA catalog returned 0 items for ") + gameTitle;
-  } else if (matchedTitleWithoutId) {
-    g_error = std::string(gameTitle) +
-        " matched, but no app or variant ID was returned";
+  } else if (titleMatchCount > 0) {
+    g_error = std::string(gameTitle) + " matched " +
+        std::to_string(titleMatchCount) +
+        " catalog result(s), but none had an app or variant ID";
   } else {
     char message[96];
     std::snprintf(message, sizeof(message),
-                  "%.32s title not matched; catalog results: %lu", gameTitle,
+                  "%.32s not in %lu catalog result(s)", gameTitle,
                   static_cast<unsigned long>(resultCount));
     g_error = message;
   }
