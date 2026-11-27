@@ -14,10 +14,17 @@ struct AuthTokens {
   std::string deviceId;
 };
 
-// Synchronous prototype: requests a device code, logs its user code and
-// verification URL, then polls until approved, denied, expired, or failed.
-// The caller must have called curl_global_init() before invoking this.
-bool auth_device_login(AuthTokens* tokens);
+// The callback runs as soon as the device authorization response arrives,
+// before token polling begins. It may refresh a synchronous screen.
+using AuthCodeCallback = void (*)(const char* userCode,
+                                  const char* verificationUrl,
+                                  void* userData);
+
+// Synchronous: requests a device code, calls onCode if supplied, then polls
+// until approved, denied, expired, or failed. The caller must have called
+// curl_global_init() before invoking this.
+bool auth_device_login(AuthTokens* tokens, AuthCodeCallback onCode = nullptr,
+                       void* userData = nullptr);
 
 // Clear token text from the current string contents before releasing them.
 void auth_clear_tokens(AuthTokens* tokens);

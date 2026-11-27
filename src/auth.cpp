@@ -26,7 +26,7 @@ constexpr size_t kMaxHttpBody = 64 * 1024;
 constexpr uint32_t kDefaultPollSeconds = 5;
 constexpr uint32_t kDefaultExpirySeconds = 600;
 constexpr uint32_t kMaxExpirySeconds = 3600;
-constexpr uint32_t kRequestTimeoutSeconds = 15;
+constexpr uint32_t kRequestTimeoutSeconds = 10;
 
 std::string g_lastError;
 std::string g_deviceId;
@@ -398,7 +398,8 @@ const char* auth_bearer_token(const AuthTokens* tokens) {
   return nullptr;
 }
 
-bool auth_device_login(AuthTokens* tokens) {
+bool auth_device_login(AuthTokens* tokens, AuthCodeCallback onCode,
+                      void* userData) {
   if (!tokens) {
     setError("AuthTokens pointer is null");
     return false;
@@ -449,7 +450,9 @@ bool auth_device_login(AuthTokens* tokens) {
   std::string deviceCode;
   WipeOnExit wipeDeviceCode{&deviceCode};
   std::string userCode;
+  WipeOnExit wipeUserCode{&userCode};
   std::string verificationUrl;
+  WipeOnExit wipeVerificationUrl{&verificationUrl};
   if (!getJsonString(authorizeResponse.data, "device_code", deviceCode) || deviceCode.empty() ||
       !getJsonString(authorizeResponse.data, "user_code", userCode) || userCode.empty() ||
       !getJsonString(authorizeResponse.data, "verification_uri_complete", verificationUrl) ||
@@ -471,13 +474,15 @@ bool auth_device_login(AuthTokens* tokens) {
   }
   wipeString(authorizeResponse.data);
 
-  // The user code is short-lived but can authorize the account. Do not share
-  // this log output. The device_code itself is never displayed or logged.
-  xsdk_log_write("auth: open %s and enter code %s (expires in %u seconds)",
-                 verificationUrl.c_str(), userCode.c_str(), expirySeconds);
+  // The user code is short-lived but can authorize the account, so show it
+  // only on the local test screen. Neither code nor URL enters the logs.
+  xsdk_log_write("auth: device code received; waiting for user approval (expires in %u seconds)",
+                 expirySeconds);
+  if (onCode) onCode(userCode.c_str(), verificationUrl.c_str(), userData);
   tokens->deviceId = deviceId;
 
   double elapsedSeconds = requestSeconds;
+  uint32_t consecutiveNetworkErrors = 0;
   while (elapsedSeconds < expirySeconds) {
     const uint32_t remaining = static_cast<uint32_t>(expirySeconds - elapsedSeconds);
     const uint32_t waitSeconds = std::min(pollSeconds, remaining);
@@ -514,6 +519,11 @@ bool auth_device_login(AuthTokens* tokens) {
     elapsedSeconds += requestSeconds;
     if (!transportOk) {
       if (isTransientCurlError(curlResult) && elapsedSeconds < expirySeconds) {
+        ++consecutiveNetworkErrors;
+        if (consecutiveNetworkErrors >= 3) {
+          setError("Token polling stopped after repeated network timeouts");
+          return false;
+        }
         xsdk_log_write("auth: temporary token poll network error; retrying");
         continue;
       }
@@ -521,6 +531,7 @@ bool auth_device_login(AuthTokens* tokens) {
       setError("Token polling failed; check the network connection");
       return false;
     }
+    consecutiveNetworkErrors = 0;
 
     if (httpStatus >= 200 && httpStatus < 300) {
       if (!appendSuccessTokens(pollResponse.data, *tokens)) {

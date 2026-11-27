@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include "auth.h"
+#include "cloudmatch.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,7 @@
 #include "xsdk/shader.h"
 #include "xsdk/text.h"
 #include "xsdk/texture.h"
+#include "xsdk/thread.h"
 
 namespace {
 constexpr uint32_t kBuffers = 2;
@@ -43,6 +45,7 @@ Theme darkTheme  = { 0xFF121212, 0xFF1E1E1E, 0xFF181818, 0xFFFFFFFF, 0xFFAAAAAA,
 
 bool isDarkMode = false;
 Theme currentTheme = lightTheme;
+bool isStreamingTestMode = true;
 const uint32_t kGreen = 0xFF76B900;
 
 enum class Tab { HOME, LIBRARY, SETTINGS };
@@ -300,10 +303,162 @@ void drawText(uint32_t selectedGame, float gridScrollY, bool notice) {
     xsdk_text_draw(230, 580, 1, currentTheme.textMuted, "D-PAD UP/DOWN  NAVIGATE       A  TOGGLE       B  BACK");
   }
 }
+
+void renderTestScreen(const char* line1, const char* line2 = nullptr,
+                      const char* line3 = nullptr, const char* line4 = nullptr) {
+  static bool firstFrame = true;
+  uint32_t address = 0;
+  if (!NT_SUCCESS(xsdk_present_begin(&address, kBeginTimeoutMs))) return;
+
+  xsdk_gpu_set_target(screenWidth, screenHeight);
+  // Resolve once before the first text draw so the eDRAM target starts black.
+  // Later resolves clear it back to black after each completed frame.
+  if (firstFrame) {
+    xsdk_gpu_resolve(address, screenWidth, screenHeight, 0xFF000000);
+    xsdk_gpu_set_target(screenWidth, screenHeight);
+    firstFrame = false;
+  }
+  if (line1) xsdk_text_draw(64, 230, 1, 0xFFFFFFFF, line1);
+  if (line2) xsdk_text_draw(64, 270, 1, 0xFFFFFFFF, line2);
+  if (line3) xsdk_text_draw(64, 315, 1, 0xFFFFFFFF, line3);
+  if (line4) xsdk_text_draw(64, 355, 1, 0xFFFFFFFF, line4);
+  xsdk_gpu_resolve(address, screenWidth, screenHeight, 0xFF000000);
+  xsdk_present_end();
+  xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
+}
+
+void showAuthCode(const char* userCode, const char* verificationUrl,
+                  void* userData) {
+  (void)userData;
+  renderTestScreen("GO TO NVIDIA.COM/LINK AND ENTER CODE:", userCode,
+                   "OFFICIAL VERIFICATION URL:", verificationUrl);
+}
+
+int runStreamingTestMode(CURLcode curlInit) {
+  NTSTATUS status = xsdk_gpu_open();
+  if (!NT_SUCCESS(status)) {
+    xsdk_log_write("test mode: GPU initialization failed");
+    return 1;
+  }
+  status = xsdk_text_open();
+  if (!NT_SUCCESS(status)) {
+    xsdk_gpu_close();
+    xsdk_log_write("test mode: text renderer initialization failed");
+    return 1;
+  }
+  status = xsdk_present_open(XSDK_DISPLAY_720P, kBuffers, 1,
+                             &screenWidth, &screenHeight);
+  if (!NT_SUCCESS(status)) {
+    xsdk_text_close();
+    xsdk_gpu_close();
+    xsdk_log_write("test mode: display initialization failed");
+    return 1;
+  }
+
+  renderTestScreen("NETWORK TEST MODE", "PRESS START TO CONNECT",
+                   "B: EXIT TO DASHBOARD");
+  bool attempted = false;
+  bool authenticated = false;
+  bool cloudSessionCreated = false;
+  AuthTokens tokens{};
+  CloudMatchSession session{};
+  uint16_t previousButtons = 0;
+  for (;;) {
+    INPUT_STATE input{};
+    if (XamInputGetState(0, 0, &input) != ERROR_SUCCESS) input = {};
+    const uint16_t buttons = input.gamepad.buttons;
+    const uint16_t pressed = buttons & static_cast<uint16_t>(~previousButtons);
+    previousButtons = buttons;
+
+    if (pressed & INPUT_GAMEPAD_B) {
+      if (cloudSessionCreated && authenticated) {
+        renderTestScreen("STOPPING CLOUDMATCH SESSION...",
+                         "Please wait up to 10 seconds.");
+        if (cloudmatch_stop_session(&tokens, &session)) {
+          renderTestScreen("CLOUDMATCH SESSION STOPPED",
+                           "Returning to dashboard...");
+          xsdk_log_write("cloudmatch: session stop succeeded");
+        } else {
+          renderTestScreen("SESSION STOP REQUEST FAILED",
+                           cloudmatch_last_error(),
+                           "The server may expire it automatically.");
+          xsdk_log_write("cloudmatch: session stop failed: %s",
+                         cloudmatch_last_error());
+        }
+        xsdk_thread_sleep(1000);
+      }
+      if (authenticated) auth_clear_tokens(&tokens);
+      break;
+    }
+    if ((pressed & INPUT_GAMEPAD_START) && !attempted) {
+      attempted = true;
+      renderTestScreen("STATUS: CONNECTING TO NVIDIA...",
+                       "Request timeout: 10 seconds");
+      if (curlInit != CURLE_OK) {
+        renderTestScreen("NETWORK TEST FAILED",
+                         "libcurl initialization failed");
+      } else {
+        if (auth_device_login(&tokens, showAuthCode, nullptr)) {
+          authenticated = true;
+          renderTestScreen("AUTHENTICATION APPROVED",
+                           "LOOKING UP CYBERPUNK 2077 AND REQUESTING SESSION...");
+          if (cloudmatch_create_session(&tokens, "Cyberpunk 2077", &session)) {
+            cloudSessionCreated = true;
+            char sessionLine[128];
+            std::snprintf(sessionLine, sizeof(sessionLine),
+                          "SESSION_ID: %s", session.sessionId.c_str());
+            char serverLine[256];
+            std::snprintf(serverLine, sizeof(serverLine),
+                          "SERVER_URL: %s", session.serverUrl.c_str());
+            renderTestScreen("CLOUDMATCH SESSION CREATED",
+                             sessionLine, serverLine,
+                             "B: STOP SESSION AND EXIT");
+            xsdk_log_write("cloudmatch: session created; session_id=%s; server_url=%s",
+                           session.sessionId.c_str(), session.serverUrl.c_str());
+          } else {
+            if (!session.sessionId.empty()) {
+              cloudSessionCreated = true;
+              char sessionLine[128];
+              std::snprintf(sessionLine, sizeof(sessionLine),
+                            "SESSION_ID: %s", session.sessionId.c_str());
+              renderTestScreen("SESSION CREATED; DETAILS INCOMPLETE",
+                               sessionLine, cloudmatch_last_error(),
+                               "B: STOP SESSION AND EXIT");
+            } else {
+              renderTestScreen("CLOUDMATCH SESSION FAILED",
+                               cloudmatch_last_error(),
+                               "No bearer token or raw response was displayed.");
+              auth_clear_tokens(&tokens);
+              authenticated = false;
+            }
+            xsdk_log_write("cloudmatch: request failed: %s",
+                           cloudmatch_last_error());
+          }
+        } else {
+          renderTestScreen("NVIDIA AUTHENTICATION FAILED",
+                           auth_last_error(), "Press B to exit.");
+          xsdk_log_write("auth: sign-in failed: %s", auth_last_error());
+          auth_clear_tokens(&tokens);
+        }
+      }
+    }
+    xsdk_thread_sleep(50);
+  }
+
+  xsdk_text_close();
+  xsdk_present_close();
+  xsdk_gpu_close();
+  return 0;
+}
 }  // namespace
 
 int gfx_run(void) {
   const CURLcode curlInit = curl_global_init(CURL_GLOBAL_DEFAULT);
+  if (isStreamingTestMode) {
+    const int result = runStreamingTestMode(curlInit);
+    curl_global_cleanup();
+    return result;
+  }
   NTSTATUS status = xsdk_gpu_open();
   if (!NT_SUCCESS(status)) { curl_global_cleanup(); return 1; }
   
