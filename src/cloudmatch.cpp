@@ -276,6 +276,7 @@ bool appendAuthHeaders(curl_slist*& headers, const char* token,
             addHeader(headers, authorization);
   if (cloudMatch) {
     ok = ok && addHeader(headers, "Content-Type: application/json") &&
+         addHeader(headers, "Connection: close") &&
          addHeader(headers, "Origin: https://play.geforcenow.com") &&
          addHeader(headers, "Referer: https://play.geforcenow.com/") &&
          addHeader(headers, "nv-browser-type: CHROME") &&
