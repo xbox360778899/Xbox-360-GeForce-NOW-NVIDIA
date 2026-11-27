@@ -415,22 +415,25 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
     for (char c : id) if (c < '0' || c > '9') return false;
     return true;
   };
-  const auto sameTitle = [](const std::string& left, const char* right) {
-    const size_t rightLength = std::strlen(right);
-    if (left.size() != rightLength) return false;
-    for (size_t i = 0; i < rightLength; ++i) {
-      const unsigned char a = static_cast<unsigned char>(left[i]);
-      const unsigned char b = static_cast<unsigned char>(right[i]);
-      if (std::tolower(a) != std::tolower(b)) return false;
+  const auto normalizeTitle = [](const std::string& title) {
+    std::string normalized;
+    normalized.reserve(title.size());
+    for (unsigned char c : title) {
+      if (std::isalnum(c)) normalized.push_back(static_cast<char>(std::tolower(c)));
     }
-    return true;
+    return normalized;
   };
+  const std::string requestedTitle = normalizeTitle(gameTitle);
 
+  size_t resultCount = 0;
+  bool matchedTitleWithoutId = false;
   size_t pos = 0;
   std::string item;
   while (nextArrayObject(items, pos, item)) {
+    ++resultCount;
     std::string title;
-    if (!getStringField(item, "title", title) || !sameTitle(title, gameTitle)) continue;
+    if (!getStringField(item, "title", title) ||
+        normalizeTitle(title) != requestedTitle) continue;
     std::string itemId;
     getFlexibleString(item, "id", itemId);
     std::string variants;
@@ -455,8 +458,20 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
     else if (!firstVariantId.empty()) appId = firstVariantId;
     else appId = itemId;
     if (!appId.empty()) return true;
+    matchedTitleWithoutId = true;
   }
-  g_error = "NVIDIA catalog search returned no exact game title with a usable app or variant ID";
+  if (resultCount == 0) {
+    g_error = std::string("NVIDIA catalog returned 0 items for ") + gameTitle;
+  } else if (matchedTitleWithoutId) {
+    g_error = std::string(gameTitle) +
+        " matched, but no app or variant ID was returned";
+  } else {
+    char message[96];
+    std::snprintf(message, sizeof(message),
+                  "%.32s title not matched; catalog results: %lu", gameTitle,
+                  static_cast<unsigned long>(resultCount));
+    g_error = message;
+  }
   return false;
 }
 
