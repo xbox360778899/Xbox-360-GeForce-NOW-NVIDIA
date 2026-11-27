@@ -33,3 +33,7 @@ bool cloudmatch_stop_session(const AuthTokens* tokens,
 // Non-secret status for the bare-metal test screen. Never includes response
 // bodies or bearer credentials.
 const char* cloudmatch_last_error();
+
+// Raw HTTP response body for the most recent HTTP status >= 400, bounded by
+// the networking response buffer limit. Never contains request credentials.
+const char* cloudmatch_last_http_error_body();

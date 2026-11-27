@@ -24,6 +24,7 @@ constexpr size_t kMaxResponseBytes = 128 * 1024;
 constexpr long kRequestTimeoutSeconds = 10;
 
 std::string g_error;
+std::string g_last_http_error_body;
 
 struct ResponseBuffer {
   std::string text;
@@ -63,6 +64,7 @@ bool httpRequest(const char* url, const char* method,
   response.text.clear();
   response.overflow = false;
   statusCode = 0;
+  g_last_http_error_body.clear();
   curl_easy_setopt(curl, CURLOPT_URL, url);
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, receiveBody);
@@ -97,6 +99,7 @@ bool httpRequest(const char* url, const char* method,
     char message[96];
     std::snprintf(message, sizeof(message), "NVIDIA endpoint returned HTTP %ld", statusCode);
     g_error = message;
+    if (statusCode >= 400) g_last_http_error_body = response.text;
     return false;
   }
   return true;
@@ -526,7 +529,8 @@ std::string buildSessionBody(const std::string& appId,
   body += "\"clientDisplayHdrCapabilities\":null,\"surroundAudioInfo\":0,\"remoteControllersBitmap\":0,";
   body += "\"clientTimezoneOffset\":0,\"enhancedStreamMode\":1,\"appLaunchMode\":1,";
   body += "\"secureRTSPSupported\":false,\"partnerCustomData\":\"\",\"accountLinked\":true,";
-  body += "\"enablePersistingInGameSettings\":false,\"requestedStreamingFeatures\":{";
+  body += "\"enablePersistingInGameSettings\":false,\"userAge\":26,";
+  body += "\"requestedStreamingFeatures\":{";
   body += "\"reflex\":false,\"bitDepth\":0,\"cloudGsync\":false,\"enabledL4S\":false,";
   body += "\"supportedHidDevices\":0,\"profile\":0,\"fallbackToLogicalResolution\":false,";
   body += "\"chromaFormat\":0,\"prefilterMode\":1,\"prefilterSharpness\":50,";
@@ -555,7 +559,25 @@ bool createSessionRequest(const char* token, const char* deviceId,
   const bool ok = httpRequest(url.c_str(), "POST", &body, headers,
                               response, httpStatus);
   curl_slist_free_all(headers);
-  if (!ok) return false;
+  if (!ok) {
+    if (httpStatus >= 400 && !g_last_http_error_body.empty()) {
+      constexpr size_t kErrorLogChunk = 220;
+      const size_t bodyBytes = g_last_http_error_body.size();
+      xsdk_log_write("cloudmatch: raw HTTP error body, %lu bytes; capped at %lu bytes",
+                     static_cast<unsigned long>(bodyBytes),
+                     static_cast<unsigned long>(kMaxResponseBytes));
+      for (size_t offset = 0, chunk = 0; offset < bodyBytes;
+           offset += kErrorLogChunk, ++chunk) {
+        char line[kErrorLogChunk + 1];
+        const size_t count = std::min(kErrorLogChunk, bodyBytes - offset);
+        std::memcpy(line, g_last_http_error_body.data() + offset, count);
+        line[count] = '\0';
+        xsdk_log_write("cloudmatch raw error %lu: %s",
+                       static_cast<unsigned long>(chunk), line);
+      }
+    }
+    return false;
+  }
 
   std::string requestStatus, statusCode;
   bool isString = false;
@@ -625,6 +647,10 @@ bool createSessionRequest(const char* token, const char* deviceId,
 
 const char* cloudmatch_last_error() {
   return g_error.c_str();
+}
+
+const char* cloudmatch_last_http_error_body() {
+  return g_last_http_error_body.c_str();
 }
 
 bool cloudmatch_resolve_app_id(const AuthTokens* tokens, const char* gameTitle,

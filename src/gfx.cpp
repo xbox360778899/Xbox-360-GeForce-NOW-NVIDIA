@@ -328,6 +328,41 @@ void renderTestScreen(const char* line1, const char* line2 = nullptr,
   xsdk_gpu_wait(xsdk_gpu_fence(), kFenceTimeoutMs);
 }
 
+void makeBodyPreview(const char* body, char* first, size_t firstSize,
+                     char* second, size_t secondSize) {
+  if (!firstSize || !secondSize) return;
+  first[0] = '\0';
+  second[0] = '\0';
+  if (!body || !*body) {
+    std::snprintf(first, firstSize, "<empty HTTP response body>");
+    return;
+  }
+  size_t line = 0;
+  size_t used = 0;
+  const size_t limits[] = {firstSize - 1, secondSize - 1};
+  char* outputs[] = {first, second};
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(body);
+       *p && line < 2; ++p) {
+    if (*p == '\r' || *p == '\n' || *p == '\t') {
+      if (used && used < limits[line]) outputs[line][used++] = ' ';
+      continue;
+    }
+    if (*p < 0x20 || *p > 0x7e) continue;
+    if (used == limits[line]) {
+      outputs[line][used] = '\0';
+      ++line;
+      used = 0;
+      if (line == 2) break;
+    }
+    outputs[line][used++] = static_cast<char>(*p);
+  }
+  if (line < 2) outputs[line][used] = '\0';
+  if (line == 1 && used == 0 && first[0]) {
+    const size_t firstLen = std::strlen(first);
+    if (firstLen + 3 < firstSize) std::memcpy(first + firstLen, "...", 4);
+  }
+}
+
 void showAuthCode(const char* userCode, const char* verificationUrl,
                   void* userData) {
   (void)userData;
@@ -414,6 +449,9 @@ int runStreamingTestMode(CURLcode curlInit) {
           } else {
             renderTestScreen("REQUESTING CLOUDMATCH...", "CATALOG APP ID:",
                              appId.c_str());
+            renderTestScreen("WAITING 5 SECONDS BEFORE CLOUDMATCH...",
+                             "Allowing the new login session to settle.");
+            xsdk_thread_sleep(5000);
             if (cloudmatch_create_session_for_app_id(&tokens, appId.c_str(), &session)) {
               cloudSessionCreated = true;
               char sessionLine[128];
@@ -437,9 +475,13 @@ int runStreamingTestMode(CURLcode curlInit) {
                                  sessionLine, cloudmatch_last_error(),
                                  "B: STOP SESSION AND EXIT");
               } else {
+                char bodyLine1[121];
+                char bodyLine2[121];
+                makeBodyPreview(cloudmatch_last_http_error_body(), bodyLine1,
+                                sizeof(bodyLine1), bodyLine2, sizeof(bodyLine2));
                 renderTestScreen("CLOUDMATCH SESSION FAILED",
                                  cloudmatch_last_error(),
-                                 "No bearer token or raw response was displayed.");
+                                 bodyLine1, bodyLine2);
                 auth_clear_tokens(&tokens);
                 authenticated = false;
               }
