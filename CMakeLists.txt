@@ -21,6 +21,7 @@ add_subdirectory("${CURL_XENON_DIR}" curl)
 add_executable(geforce_now_ui
     src/main.cpp
     src/gfx.cpp
+    src/auth.cpp
 )
 target_include_directories(geforce_now_ui PRIVATE third_party)
 target_link_libraries(geforce_now_ui PRIVATE CURL::libcurl mbedtls)

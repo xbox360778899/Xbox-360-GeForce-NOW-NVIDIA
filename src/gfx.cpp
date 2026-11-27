@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "auth.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -340,6 +341,8 @@ int gfx_run(void) {
   float gridScrollY = 0.0f;
   bool notice = false;
   uint16_t previousButtons = 0;
+  AuthTokens authTokens{};
+  bool authenticated = false;
   bool needCoverUpdate = true; 
 
   manageMemory(gridScrollY, selectedGame);
@@ -354,6 +357,18 @@ int gfx_run(void) {
     const uint16_t pressed = buttons & static_cast<uint16_t>(~previousButtons);
     previousButtons = buttons;
     
+    if (pressed & INPUT_GAMEPAD_START) {
+      if (curlInit != CURLE_OK) {
+        xsdk_log_write("auth: libcurl initialization failed; sign-in unavailable");
+      } else if (auth_device_login(&authTokens)) {
+        authenticated = true;
+        xsdk_log_write("auth: sign-in token is ready in memory for the next networking step");
+      } else {
+        authenticated = false;
+        xsdk_log_write("auth: sign-in failed: %s", auth_last_error());
+      }
+    }
+
     if (pressed & INPUT_GAMEPAD_B) {
         if (currentTab != Tab::HOME) {
             currentTab = Tab::HOME;
@@ -507,6 +522,7 @@ int gfx_run(void) {
   xsdk_shader_free(&pixelShader);
   xsdk_shader_free(&vertexShader);
   xsdk_gpu_close();
+  if (authenticated) auth_clear_tokens(&authTokens);
   curl_global_cleanup();
   return 0;
 }
