@@ -390,10 +390,9 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
   if (!ok) return false;
 
   // NVIDIA catalog responses may contain a large account-specific library.
-  // Log a bounded raw prefix for diagnostics without flooding the console log.
-  constexpr size_t kCatalogLogLimit = 2048;
+  // Preserve the complete response while splitting it into short log lines.
   constexpr size_t kCatalogLogChunk = 240;
-  const size_t logBytes = std::min(response.text.size(), kCatalogLogLimit);
+  const size_t logBytes = response.text.size();
   xsdk_log_write("catalog: raw GraphQL response, %lu bytes; logging first %lu bytes",
                  static_cast<unsigned long>(response.text.size()),
                  static_cast<unsigned long>(logBytes));
@@ -405,9 +404,6 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
     line[count] = '\0';
     xsdk_log_write("catalog raw %lu: %s",
                    static_cast<unsigned long>(chunk), line);
-  }
-  if (logBytes < response.text.size()) {
-    xsdk_log_write("catalog: raw response truncated in log; inspect only on a trusted device");
   }
 
   std::string errors;
