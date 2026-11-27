@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include <curl/curl.h>
 #define STBI_ONLY_JPEG
@@ -400,39 +401,51 @@ int runStreamingTestMode(CURLcode curlInit) {
       } else {
         if (auth_device_login(&tokens, showAuthCode, nullptr)) {
           authenticated = true;
-          renderTestScreen("AUTHENTICATION APPROVED",
-                           "LOOKING UP CYBERPUNK 2077 AND REQUESTING SESSION...");
-          if (cloudmatch_create_session(&tokens, "Cyberpunk 2077", &session)) {
-            cloudSessionCreated = true;
-            char sessionLine[128];
-            std::snprintf(sessionLine, sizeof(sessionLine),
-                          "SESSION_ID: %s", session.sessionId.c_str());
-            char serverLine[256];
-            std::snprintf(serverLine, sizeof(serverLine),
-                          "SERVER_URL: %s", session.serverUrl.c_str());
-            renderTestScreen("CLOUDMATCH SESSION CREATED",
-                             sessionLine, serverLine,
-                             "B: STOP SESSION AND EXIT");
-            xsdk_log_write("cloudmatch: session created; session_id=%s; server_url=%s",
-                           session.sessionId.c_str(), session.serverUrl.c_str());
+          renderTestScreen("SEARCHING CATALOG FOR FORTNITE...",
+                           "Please wait up to 10 seconds.");
+          std::string appId;
+          if (!cloudmatch_resolve_app_id(&tokens, "Fortnite", &appId)) {
+            renderTestScreen("CATALOG LOOKUP FAILED",
+                             cloudmatch_last_error(), "Press B to exit.");
+            xsdk_log_write("catalog: Fortnite lookup failed: %s",
+                           cloudmatch_last_error());
+            auth_clear_tokens(&tokens);
+            authenticated = false;
           } else {
-            if (!session.sessionId.empty()) {
+            renderTestScreen("REQUESTING CLOUDMATCH...", "CATALOG APP ID:",
+                             appId.c_str());
+            if (cloudmatch_create_session_for_app_id(&tokens, appId.c_str(), &session)) {
               cloudSessionCreated = true;
               char sessionLine[128];
               std::snprintf(sessionLine, sizeof(sessionLine),
                             "SESSION_ID: %s", session.sessionId.c_str());
-              renderTestScreen("SESSION CREATED; DETAILS INCOMPLETE",
-                               sessionLine, cloudmatch_last_error(),
+              char serverLine[256];
+              std::snprintf(serverLine, sizeof(serverLine),
+                            "SERVER_URL: %s", session.serverUrl.c_str());
+              renderTestScreen("CLOUDMATCH SESSION CREATED",
+                               sessionLine, serverLine,
                                "B: STOP SESSION AND EXIT");
+              xsdk_log_write("cloudmatch: session created; session_id=%s; server_url=%s",
+                             session.sessionId.c_str(), session.serverUrl.c_str());
             } else {
-              renderTestScreen("CLOUDMATCH SESSION FAILED",
-                               cloudmatch_last_error(),
-                               "No bearer token or raw response was displayed.");
-              auth_clear_tokens(&tokens);
-              authenticated = false;
+              if (!session.sessionId.empty()) {
+                cloudSessionCreated = true;
+                char sessionLine[128];
+                std::snprintf(sessionLine, sizeof(sessionLine),
+                              "SESSION_ID: %s", session.sessionId.c_str());
+                renderTestScreen("SESSION CREATED; DETAILS INCOMPLETE",
+                                 sessionLine, cloudmatch_last_error(),
+                                 "B: STOP SESSION AND EXIT");
+              } else {
+                renderTestScreen("CLOUDMATCH SESSION FAILED",
+                                 cloudmatch_last_error(),
+                                 "No bearer token or raw response was displayed.");
+                auth_clear_tokens(&tokens);
+                authenticated = false;
+              }
+              xsdk_log_write("cloudmatch: request failed: %s",
+                             cloudmatch_last_error());
             }
-            xsdk_log_write("cloudmatch: request failed: %s",
-                           cloudmatch_last_error());
           }
         } else {
           renderTestScreen("NVIDIA AUTHENTICATION FAILED",

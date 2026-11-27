@@ -314,7 +314,8 @@ bool appendCatalogHeaders(curl_slist*& headers, const char* token) {
          addHeader(headers, "nv-device-type: DESKTOP") &&
          addHeader(headers, "nv-device-make: UNKNOWN") &&
          addHeader(headers, "nv-device-model: UNKNOWN") &&
-         addHeader(headers, "nv-browser-type: CHROME");
+         addHeader(headers, "nv-browser-type: CHROME") &&
+         addHeader(headers, std::string("User-Agent: ") + kUserAgent);
 }
 
 bool randomUuid(std::string& uuid) {
@@ -366,11 +367,13 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
       "$searchString:String!,$filters:AppFilterFields!){"
       "apps(vpcId:$vpcId,language:$locale,orderBy:$sortString,"
       "first:$fetchCount,after:$cursor,searchQuery:$searchString,filters:$filters){"
-      "items{id title variants{id appStore}} pageInfo{hasNextPage endCursor totalCount}}}";
+      "items{id title variants{id appStore gfn{library{lastPlayedDate}}}"
+      "images{GAME_BOX_ART KEY_IMAGE KEY_ART}}"
+      "pageInfo{hasNextPage endCursor totalCount}}}";
   const std::string body = std::string("{\"query\":\"") + query +
       "\",\"variables\":{\"vpcId\":\"" + jsonEscape(vpcId) +
       "\",\"locale\":\"en_US\",\"sortString\":\"itemMetadata.relevance:DESC,sortName:ASC\","
-      "\"fetchCount\":20,\"cursor\":\"\",\"searchString\":\"" +
+      "\"fetchCount\":200,\"cursor\":\"\",\"searchString\":\"" +
       jsonEscape(gameTitle) + "\",\"filters\":{}}}";
   curl_slist* headers = nullptr;
   if (!appendCatalogHeaders(headers, token)) {
@@ -385,41 +388,75 @@ bool resolveCatalogAppId(const char* token, const std::string& vpcId,
   curl_slist_free_all(headers);
   if (!ok) return false;
 
-  std::string data, apps, items;
+  std::string errors;
   bool isString = false;
+  if (getRawField(response.text, "errors", errors, isString)) {
+    size_t errorPos = 0;
+    std::string errorObject;
+    if (nextArrayObject(errors, errorPos, errorObject)) {
+      std::string message;
+      if (getStringField(errorObject, "message", message) && !message.empty()) {
+        g_error = "NVIDIA catalog GraphQL error: " + message;
+        return false;
+      }
+    }
+  }
+
+  std::string data, apps, items;
   if (!getRawField(response.text, "data", data, isString) ||
       !getRawField(data, "apps", apps, isString) ||
       !getRawField(apps, "items", items, isString)) {
     g_error = "NVIDIA catalog response did not contain game results";
     return false;
   }
+
+  const auto isNumericId = [](const std::string& id) {
+    if (id.empty()) return false;
+    for (char c : id) if (c < '0' || c > '9') return false;
+    return true;
+  };
+  const auto sameTitle = [](const std::string& left, const char* right) {
+    const size_t rightLength = std::strlen(right);
+    if (left.size() != rightLength) return false;
+    for (size_t i = 0; i < rightLength; ++i) {
+      const unsigned char a = static_cast<unsigned char>(left[i]);
+      const unsigned char b = static_cast<unsigned char>(right[i]);
+      if (std::tolower(a) != std::tolower(b)) return false;
+    }
+    return true;
+  };
+
   size_t pos = 0;
   std::string item;
   while (nextArrayObject(items, pos, item)) {
     std::string title;
-    if (!getStringField(item, "title", title) || title != gameTitle) continue;
+    if (!getStringField(item, "title", title) || !sameTitle(title, gameTitle)) continue;
     std::string itemId;
     getFlexibleString(item, "id", itemId);
     std::string variants;
+    std::string firstVariantId;
+    std::string numericVariantId;
     if (getRawField(item, "variants", variants, isString)) {
       size_t variantPos = 0;
       std::string variant;
       while (nextArrayObject(variants, variantPos, variant)) {
         std::string variantId;
         if (getFlexibleString(variant, "id", variantId) && !variantId.empty()) {
-          bool numeric = true;
-          for (char c : variantId) if (c < '0' || c > '9') numeric = false;
-          if (numeric) { appId = variantId; return true; }
+          if (firstVariantId.empty()) firstVariantId = variantId;
+          if (isNumericId(variantId)) {
+            numericVariantId = variantId;
+            break;
+          }
         }
       }
     }
-    if (!itemId.empty()) {
-      bool numeric = true;
-      for (char c : itemId) if (c < '0' || c > '9') numeric = false;
-      if (numeric) { appId = itemId; return true; }
-    }
+    if (!numericVariantId.empty()) appId = numericVariantId;
+    else if (isNumericId(itemId)) appId = itemId;
+    else if (!firstVariantId.empty()) appId = firstVariantId;
+    else appId = itemId;
+    if (!appId.empty()) return true;
   }
-  g_error = "NVIDIA catalog did not return an exact numeric app ID for this game";
+  g_error = "NVIDIA catalog search returned no exact game title with a usable app or variant ID";
   return false;
 }
 
@@ -550,11 +587,11 @@ const char* cloudmatch_last_error() {
   return g_error.c_str();
 }
 
-bool cloudmatch_create_session(const AuthTokens* tokens, const char* gameTitle,
-                               CloudMatchSession* session) {
+bool cloudmatch_resolve_app_id(const AuthTokens* tokens, const char* gameTitle,
+                               std::string* appId) {
   g_error.clear();
-  if (!tokens || !gameTitle || !*gameTitle || !session) {
-    g_error = "CloudMatch request is missing required input";
+  if (!tokens || !gameTitle || !*gameTitle || !appId) {
+    g_error = "Catalog lookup is missing required input";
     return false;
   }
   const char* token = auth_bearer_token(tokens);
@@ -565,9 +602,32 @@ bool cloudmatch_create_session(const AuthTokens* tokens, const char* gameTitle,
   const std::string& deviceId = tokens->deviceId.empty() ? auth_device_id() : tokens->deviceId;
   std::string vpcId;
   if (!getVpcId(token, deviceId.c_str(), vpcId)) return false;
-  std::string appId;
-  if (!resolveCatalogAppId(token, vpcId, gameTitle, appId)) return false;
+  appId->clear();
+  return resolveCatalogAppId(token, vpcId, gameTitle, *appId);
+}
+
+bool cloudmatch_create_session_for_app_id(const AuthTokens* tokens,
+                                          const char* appId,
+                                          CloudMatchSession* session) {
+  g_error.clear();
+  if (!tokens || !appId || !*appId || !session) {
+    g_error = "CloudMatch request is missing a catalog app ID or session output";
+    return false;
+  }
+  const char* token = auth_bearer_token(tokens);
+  if (!token || !*token) {
+    g_error = "Sign-in token is not available in memory";
+    return false;
+  }
+  const std::string& deviceId = tokens->deviceId.empty() ? auth_device_id() : tokens->deviceId;
   return createSessionRequest(token, deviceId.c_str(), appId, session);
+}
+
+bool cloudmatch_create_session(const AuthTokens* tokens, const char* gameTitle,
+                               CloudMatchSession* session) {
+  std::string appId;
+  if (!cloudmatch_resolve_app_id(tokens, gameTitle, &appId)) return false;
+  return cloudmatch_create_session_for_app_id(tokens, appId.c_str(), session);
 }
 
 bool cloudmatch_stop_session(const AuthTokens* tokens,

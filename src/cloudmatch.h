@@ -11,6 +11,15 @@ struct CloudMatchSession {
   std::string clientId;
 };
 
+// Resolve a game through NVIDIA's GraphQL catalog and return its launchable ID.
+bool cloudmatch_resolve_app_id(const AuthTokens* tokens, const char* gameTitle,
+                               std::string* appId);
+
+// Create a session with the catalog ID returned by cloudmatch_resolve_app_id.
+bool cloudmatch_create_session_for_app_id(const AuthTokens* tokens,
+                                          const char* appId,
+                                          CloudMatchSession* session);
+
 // Resolve the title through NVIDIA's catalog (never pass its Steam store ID),
 // then request a CloudMatch session. The returned serverUrl is the WebSocket
 // signaling URL derived from the session's connectionInfo/resourcePath.
