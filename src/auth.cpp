@@ -520,11 +520,11 @@ bool auth_device_login(AuthTokens* tokens, AuthCodeCallback onCode,
     if (!transportOk) {
       if (isTransientCurlError(curlResult) && elapsedSeconds < expirySeconds) {
         ++consecutiveNetworkErrors;
-        if (consecutiveNetworkErrors >= 3) {
-          setError("Token polling stopped after repeated network timeouts");
-          return false;
+        if (consecutiveNetworkErrors == 1 ||
+            (consecutiveNetworkErrors % 6) == 0) {
+          xsdk_log_write("auth: temporary token poll network error; retrying (attempt %u)",
+                         consecutiveNetworkErrors);
         }
-        xsdk_log_write("auth: temporary token poll network error; retrying");
         continue;
       }
       xsdk_log_write("auth: token poll failed (curl=%d)", static_cast<int>(curlResult));

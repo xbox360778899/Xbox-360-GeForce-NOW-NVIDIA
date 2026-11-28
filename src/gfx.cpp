@@ -366,8 +366,8 @@ void makeBodyPreview(const char* body, char* first, size_t firstSize,
 void showAuthCode(const char* userCode, const char* verificationUrl,
                   void* userData) {
   (void)userData;
-  renderTestScreen("GO TO NVIDIA.COM/LINK AND ENTER CODE:", userCode,
-                   "OFFICIAL VERIFICATION URL:", verificationUrl);
+  renderTestScreen("WAITING FOR AUTHORIZATION...",
+                   "(CHECK YOUR PHONE)", userCode, verificationUrl);
 }
 
 int runStreamingTestMode(CURLcode curlInit) {
